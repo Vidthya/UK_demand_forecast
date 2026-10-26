@@ -54,9 +54,9 @@ def add_features(df):
         out = out.merge(lag.rename(columns={"y": f"lag{k}"}), on=["date", "period"], how="left")
     lag_cols = [f"lag{k}" for k in range(1, 8)]
     out["mean7"] = out[lag_cols].mean(axis=1)
-    out["dow"] = out["date"].dt.dayofweek
-    out["doy_sin"] = np.sin(2 * np.pi * out["date"].dt.dayofyear / 365.25)
-    out["doy_cos"] = np.cos(2 * np.pi * out["date"].dt.dayofyear / 365.25)
+    out["dow"] = out["date"].dt.day_of_week
+    out["doy_sin"] = np.sin(2 * np.pi * out["date"].dt.day_of_year / 365.25)
+    out["doy_cos"] = np.cos(2 * np.pi * out["date"].dt.day_of_year / 365.25)
     out["year"] = out["date"].dt.year
     return out.dropna(subset=lag_cols).reset_index(drop=True)
  

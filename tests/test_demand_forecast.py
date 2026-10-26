@@ -1,4 +1,4 @@
-"""Tests for demand_forecast.py. All data here is small, made-up data, not NESO data."""
+##All data here is small, made-up data, not NESO data
 import numpy as np
 import pandas as pd
 import pytest
@@ -20,7 +20,7 @@ def write_csv(path, rows, columns=("SETTLEMENT_DATE", "SETTLEMENT_PERIOD", "ND")
     pd.DataFrame(rows, columns=list(columns)).to_csv(path, index=False)
 
 
-# ---------- metric ----------
+##Metric
 
 def test_wape_perfect_forecast_is_zero():
     y = np.array([100.0, 200.0, 300.0])
@@ -39,7 +39,7 @@ def test_wape_counts_over_and_under_prediction_equally():
     assert df_mod.wape(y, y + 10) == pytest.approx(df_mod.wape(y, y - 10))
 
 
-# ---------- features ----------
+##Features
 
 def test_lags_match_the_right_earlier_values():
     frame = make_frame(days=20)
@@ -67,7 +67,7 @@ def test_first_week_is_dropped_because_lags_are_missing():
 
 
 def test_features_never_contain_the_target_itself():
-    assert "y" not in df_mod.FEATURES
+    assert "y" not in df_mod.features
 
 
 def test_features_use_only_information_from_earlier_days():
@@ -80,9 +80,9 @@ def test_features_use_only_information_from_earlier_days():
     changed.loc[changed["date"] >= cutoff, "y"] += 5000
     after = df_mod.add_features(changed)
 
-    # features for the first day of change use only days before it, so rows before the cutoff
-    # must be identical, and rows on the cutoff day depend only on pre-cutoff days
-    cols = df_mod.FEATURES
+    ##features for the first day of change use only days before it
+    ##must be identical, rows on the cutoff day depend only on pre-cutoff days
+    cols = df_mod.features
     b = base[base["date"] <= cutoff].reset_index(drop=True)
     a = after[after["date"] <= cutoff].reset_index(drop=True)
     pd.testing.assert_frame_equal(b[cols], a[cols])
@@ -95,7 +95,7 @@ def test_calendar_features_are_in_expected_ranges():
     assert feats["doy_cos"].between(-1, 1).all()
 
 
-# ---------- loading ----------
+##Loading
 
 def test_load_parses_dates_and_renames_columns(tmp_path):
     write_csv(tmp_path / "a.csv", [("01-Jan-2016", 1, 20000), ("01-Jan-2016", 2, 21000)])
@@ -107,9 +107,9 @@ def test_load_parses_dates_and_renames_columns(tmp_path):
 def test_load_removes_duplicates_and_non_positive_demand(tmp_path):
     write_csv(tmp_path / "a.csv", [
         ("01-Jan-2016", 1, 20000),
-        ("01-Jan-2016", 1, 20000),   # duplicate
-        ("01-Jan-2016", 2, 0),       # not a real value
-        ("01-Jan-2016", 3, -5),      # not a real value
+        ("01-Jan-2016", 1, 20000),   ##duplicate
+        ("01-Jan-2016", 2, 0),       ##not a real value
+        ("01-Jan-2016", 3, -5),      ##not a real value
     ])
     out = df_mod.load(str(tmp_path))
     assert len(out) == 1
@@ -118,7 +118,7 @@ def test_load_removes_duplicates_and_non_positive_demand(tmp_path):
 def test_load_drops_years_before_first_year(tmp_path):
     write_csv(tmp_path / "a.csv", [("01-Jan-2005", 1, 20000), ("01-Jan-2016", 1, 20000)])
     out = df_mod.load(str(tmp_path))
-    assert out["date"].dt.year.min() >= df_mod.FIRST_YEAR
+    assert out["date"].dt.year.min() >= df_mod.first_year
 
 
 def test_load_handles_lowercase_and_padded_column_names(tmp_path):
@@ -148,28 +148,28 @@ def test_load_sorts_by_date_and_period(tmp_path):
         out[["date", "period"]].apply(tuple, axis=1).tolist())
 
 
-# ---------- model ----------
+##Model
 
 def test_fit_is_repeatable_with_fixed_seed():
     feats = df_mod.add_features(make_frame(days=40))
     m1, m2 = df_mod.fit(feats), df_mod.fit(feats)
-    np.testing.assert_allclose(m1.predict(feats[df_mod.FEATURES]), m2.predict(feats[df_mod.FEATURES]))
+    np.testing.assert_allclose(m1.predict(feats[df_mod.features]), m2.predict(feats[df_mod.features]))
 
 
 def test_model_is_not_wildly_worse_than_the_yesterday_baseline_on_learnable_data():
     feats = df_mod.add_features(make_frame(days=120, seed=3))
     train, test = feats.iloc[:-2000], feats.iloc[-2000:]
     model = df_mod.fit(train)
-    model_err = df_mod.wape(test["y"], model.predict(test[df_mod.FEATURES]))
+    model_err = df_mod.wape(test["y"], model.predict(test[df_mod.features]))
     baseline_err = df_mod.wape(test["y"], test["lag1"])
     assert model_err < baseline_err * 1.5   # sanity bound: model is not wildly worse
 
 
-# ---------- end to end ----------
+##End-to-end
 
 def test_main_writes_results_on_small_made_up_data(tmp_path, monkeypatch):
-    monkeypatch.setattr(df_mod, "FIRST_YEAR", 2016)
-    monkeypatch.setattr(df_mod, "TRAIN_END", 2018)
+    monkeypatch.setattr(df_mod, "first_year", 2016)
+    monkeypatch.setattr(df_mod, "train_end", 2018)
     data, out = tmp_path / "data", tmp_path / "results"
     data.mkdir()
     for year in range(2016, 2021):
