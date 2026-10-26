@@ -7,7 +7,10 @@ Original file is located at
     https://colab.research.google.com/drive/1gH9KSU56q-enn7Udy03kJHe2WNhWEXmY
 """
 
+import argparse
 import glob, os, shutil
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -20,18 +23,13 @@ target = "ND"
 os.makedirs("data", exist_ok=True)
 os.makedirs("results", exist_ok=True)
 
-from google.colab import files
-up = files.upload()
-for name in up:
-    shutil.move(name, "data/" + name)
-print(sorted(os.listdir("data")))
 
 def load(folder):
-    files_ = sorted(glob.glob(os.path.join(folder, "*.csv")))
-    if not files_:
-        raise SystemExit("No CSV files found in data/")
+    files = sorted(glob.glob(os.path.join(folder, "*.csv")))
+    if not files:
+        raise SystemExit(f"No CSV files found in {folder}. Download the yearly files from the NESO Historic Demand Data page.")
     frames = []
-    for f in files_:
+    for f in files:
         d = pd.read_csv(f)
         d.columns = [c.strip().upper() for c in d.columns]
         need = {"SETTLEMENT_DATE", "SETTLEMENT_PERIOD", target}
@@ -43,9 +41,12 @@ def load(folder):
     df["date"] = pd.to_datetime(df["SETTLEMENT_DATE"], format="mixed", dayfirst=True)
     df = df.rename(columns={"SETTLEMENT_PERIOD": "period", target: "y"})
     df = df[["date", "period", "y"]].drop_duplicates(["date", "period"]).sort_values(["date", "period"])
-    return df[(df["y"] > 0) & (df["date"].dt.year >= first_year)].reset_index(drop=True)
-
+    df = df[(df["y"] > 0) & (df["date"].dt.year >= first_year)].reset_index(drop=True)
+    return df
+ 
+ 
 def add_features(df):
+    """Every feature uses data from at least one full day before the half-hour being forecast."""
     out = df.copy()
     for k in range(1, 8):
         lag = df[["date", "period", "y"]].copy()
@@ -58,45 +59,73 @@ def add_features(df):
     out["doy_cos"] = np.cos(2 * np.pi * out["date"].dt.dayofyear / 365.25)
     out["year"] = out["date"].dt.year
     return out.dropna(subset=lag_cols).reset_index(drop=True)
-
+ 
+ 
 features = ["period", "dow", "doy_sin", "doy_cos", "lag1", "lag2", "lag7", "mean7"]
-
+ 
+ 
 def wape(y, p):
     return 100 * np.abs(y - p).sum() / np.abs(y).sum()
-
+ 
+ 
 def fit(train):
     m = HistGradientBoostingRegressor(max_iter=300, learning_rate=0.05, max_leaf_nodes=15,
                                       l2_regularization=1.0, random_state=seed)
     return m.fit(train[features], train["y"])
-
-df = add_features(load("data"))
-years = sorted(df["year"].unique())
-test_years = [y for y in years if y > train_end]
-print(len(df), "half-hours,", years[0], "-", years[-1])
-
-frozen = fit(df[df["year"] <= train_end])
-rows = []
-for y in test_years:
-    te = df[df["year"] == y]
-    retrained = fit(df[df["year"] < y])
-    rows.append({
-        "year": y,
-        "mean_demand_MW": te["y"].mean(),
-        "same_time_yesterday": wape(te["y"], te["lag1"]),
-        "same_time_last_week": wape(te["y"], te["lag7"]),
-        "mean_of_last_7_days": wape(te["y"], te["mean7"]),
-        "gbm_frozen": wape(te["y"], frozen.predict(te[features])),
-        "gbm_retrained_yearly": wape(te["y"], retrained.predict(te[features])),
-    })
-res = pd.DataFrame(rows).round(2)
-res.to_csv("results/wape_by_year.csv", index=False)
-print(res.to_string(index=False))
-
-fig, ax = plt.subplots(figsize=(8, 4.5))
-for c, col, ls in [("same_time_last_week", "#888888", "--"), ("mean_of_last_7_days", "#bbbbbb", ":"),
-                   ("gbm_frozen", "#d95f02", "-"), ("gbm_retrained_yearly", "#1b3bd6", "-")]:
-    ax.plot(res["year"], res[c], color=col, linestyle=ls, marker="o", label=c.replace("_", " "))
-ax.set_ylabel("Error (WAPE, %)"); ax.set_xlabel("Test year")
-ax.set_title("Day-ahead demand forecast error by year"); ax.legend(frameon=False)
-plt.show()
-
+ 
+ 
+def main(data_dir="data", out_dir="results"):
+    os.makedirs(out_dir, exist_ok=True)
+    df = add_features(load(data_dir))
+    years = sorted(df["year"].unique())
+    test_years = [y for y in years if y > train_end]
+    if not test_years or train_end not in years:
+        raise SystemExit(f"Need data from {first_year} to beyond {train_end}. Years found: {years}")
+    print(f"{len(df):,} half-hours, {years[0]}-{years[-1]}")
+ 
+    frozen = fit(df[df["year"] <= train_end])
+    rows = []
+    for y in test_years:
+        te = df[df["year"] == y]
+        retrained = fit(df[df["year"] < y])            ##all earlier years only
+        rows.append({
+            "year": y,
+            "mean_demand_MW": te["y"].mean(),
+            "same_time_yesterday": wape(te["y"], te["lag1"]),
+            "same_time_last_week": wape(te["y"], te["lag7"]),
+            "mean_of_last_7_days": wape(te["y"], te["mean7"]),
+            "gbm_frozen": wape(te["y"], frozen.predict(te[features])),
+            "gbm_retrained_yearly": wape(te["y"], retrained.predict(te[features])),
+        })
+    res = pd.DataFrame(rows).round(2)
+    res.to_csv(os.path.join(out_dir, "wape_by_year.csv"), index=False)
+    print(res.to_string(index=False))
+ 
+    # chart 1: error by year
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    styles = {"same_time_last_week": ("#888888", "--"), "mean_of_last_7_days": ("#bbbbbb", ":"),
+              "gbm_frozen": ("#d95f02", "-"), "gbm_retrained_yearly": ("#1b3bd6", "-")}
+    for c, (col, ls) in styles.items():
+        ax.plot(res["year"], res[c], color=col, linestyle=ls, marker="o", label=c.replace("_", " "))
+    ax.set_ylabel("Error (WAPE, %)"); ax.set_xlabel("Test year")
+    ax.set_title("Day-ahead demand forecast error by year"); ax.legend(frameon=False)
+    ax.spines[["top", "right"]].set_visible(False)
+    fig.tight_layout(); fig.savefig(os.path.join(out_dir, "error_by_year.png"), dpi=150); plt.close(fig)
+ 
+    # chart 2: average demand by year
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ann = df.groupby("year")["y"].mean()
+    ax.plot(ann.index, ann.values / 1000, marker="o", color="#1b3bd6")
+    ax.set_ylabel("Mean national demand (GW)"); ax.set_xlabel("Year")
+    ax.set_title("Mean national demand by year"); ax.spines[["top", "right"]].set_visible(False)
+    fig.tight_layout(); fig.savefig(os.path.join(out_dir, "mean_demand_by_year.png"), dpi=150); plt.close(fig)
+    print(f"Results written to {out_dir}/")
+ 
+ 
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--data", default="data")
+    ap.add_argument("--out", default="results")
+    args, _ = ap.parse_known_args()
+    main(args.data, args.out)
+ 
